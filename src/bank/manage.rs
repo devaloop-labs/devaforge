@@ -1,0 +1,165 @@
+use crate::utils::semver;
+use serde::Deserialize;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize, Default)]
+struct BankSection {
+    name: Option<String>,
+    author: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    access: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BankTomlDoc {
+    bank: Option<BankSection>,
+}
+
+pub fn list_banks(cwd: &str) -> Result<(), String> {
+    let root = Path::new(cwd).join("generated").join("banks");
+    if !root.exists() {
+        println!("No banks directory at {}", root.to_string_lossy());
+        return Ok(());
+    }
+    let mut entries: Vec<PathBuf> = Vec::new();
+    let rd = fs::read_dir(&root)
+        .map_err(|e| format!("Failed to list {}: {}", root.to_string_lossy(), e))?;
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() && p.join("bank.toml").exists() {
+            entries.push(p);
+        }
+    }
+    if entries.is_empty() {
+        println!("No banks found in {}", root.to_string_lossy());
+        return Ok(());
+    }
+    entries.sort();
+    for p in entries {
+        let id = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let fp = p.join("bank.toml");
+        let doc: BankTomlDoc = fs::read_to_string(&fp)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
+        let b = doc.bank.unwrap_or_default();
+        let author = b.author.unwrap_or_else(|| "?".into());
+        let name = b.name.unwrap_or_else(|| id.to_string());
+        let version = b.version.unwrap_or_else(|| "?".into());
+        let access = b.access.unwrap_or_else(|| "?".into());
+        let description = b.description.unwrap_or_default();
+        println!(
+            "- {}.{}  v{}  [{}]  {}",
+            author, name, version, access, description
+        );
+    }
+    Ok(())
+}
+
+pub fn bump_version(cwd: &str, id: &str, bump: &str) -> Result<(), String> {
+    let bank_dir = Path::new(cwd).join("generated").join("banks").join(id);
+    if !bank_dir.is_dir() {
+        return Err(format!(
+            "Bank '{}' not found under {}",
+            id,
+            bank_dir.parent().unwrap_or(Path::new("")).to_string_lossy()
+        ));
+    }
+    let path = bank_dir.join("bank.toml");
+    if !path.exists() {
+        return Err(format!(
+            "bank.toml not found in {}",
+            bank_dir.to_string_lossy()
+        ));
+    }
+
+    // Read current version from TOML, but update by editing the text to preserve formatting
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.to_string_lossy(), e))?;
+    let current = parse_version_from_bank_toml(&content).unwrap_or_else(|| "0.0.1".to_string());
+    let new_version = semver::compute_bump(&current, bump)?;
+
+    let updated = write_version_in_bank_toml(&content, &new_version)?;
+    fs::write(&path, updated)
+        .map_err(|e| format!("Failed to write {}: {}", path.to_string_lossy(), e))?;
+    println!("✅ {} -> {}", current, new_version);
+    Ok(())
+}
+
+fn parse_version_from_bank_toml(toml_text: &str) -> Option<String> {
+    // Quick parse: prefer TOML parsing for correctness
+    if let Ok(doc) = toml::from_str::<BankTomlDoc>(toml_text) {
+        if let Some(b) = doc.bank {
+            return b.version;
+        }
+    }
+    None
+}
+
+// compute_bump moved to utils::semver
+
+fn write_version_in_bank_toml(original: &str, new_version: &str) -> Result<String, String> {
+    let mut lines: Vec<String> = original.lines().map(|s| s.to_string()).collect();
+    let mut in_bank = false;
+    let mut bank_start = None::<usize>;
+    let mut bank_end = lines.len();
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.trim();
+        if t == "[bank]" {
+            in_bank = true;
+            bank_start = Some(i);
+            continue;
+        }
+        if in_bank && t.starts_with('[') && t != "[bank]" {
+            bank_end = i;
+            break;
+        }
+    }
+    if !in_bank {
+        return Err("[bank] section not found".into());
+    }
+    let start = bank_start.unwrap();
+    // Search for version line inside (start, bank_end)
+    let mut version_line_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate().take(bank_end).skip(start + 1) {
+        let t = line.trim();
+        if t.starts_with("version") && t.contains('=') {
+            version_line_idx = Some(i);
+            break;
+        }
+    }
+
+    let version_line = format!("version = \"{}\"", new_version);
+    match version_line_idx {
+        Some(i) => {
+            // Replace in place, keep indentation
+            let indent = lines[i]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect::<String>();
+            lines[i] = format!("{}{}", indent, version_line);
+        }
+        None => {
+            // Insert before the blank line that separates bank and next section (if any)
+            // Find last non-empty line inside bank block
+            let mut insert_at = bank_end;
+            for (i, line) in lines.iter().enumerate().take(bank_end).skip(start + 1) {
+                if line.trim().is_empty() {
+                    insert_at = i; // first blank -> insert here
+                    break;
+                }
+            }
+            if insert_at == bank_end {
+                insert_at = bank_end;
+            }
+            lines.insert(insert_at, version_line);
+        }
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
