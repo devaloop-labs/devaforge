@@ -33,7 +33,6 @@ if (binaryName !== "") {
     follow_redirects_1.https
         .get(url, (res) => {
         if (res.statusCode === 404) {
-            // Gracefully skip when the asset is not yet published; keep CI green
             console.warn(`⚠️  Asset not found (HTTP 404). Skipping binary download.`);
             res.resume();
             return;

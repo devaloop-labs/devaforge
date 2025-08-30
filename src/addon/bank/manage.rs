@@ -1,7 +1,7 @@
 use crate::utils::semver;
 use serde::Deserialize;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{ Path, PathBuf };
 
 #[derive(Debug, Deserialize, Default)]
 struct BankSection {
@@ -17,6 +17,11 @@ struct BankTomlDoc {
     bank: Option<BankSection>,
 }
 
+/// Lists all banks in the `generated/banks` directory.
+///
+/// ### Parameters
+/// - `cwd`: The current working directory.
+///
 pub fn list_banks(cwd: &str) -> Result<(), String> {
     let root = Path::new(cwd).join("generated").join("banks");
     if !root.exists() {
@@ -24,7 +29,8 @@ pub fn list_banks(cwd: &str) -> Result<(), String> {
         return Ok(());
     }
     let mut entries: Vec<PathBuf> = Vec::new();
-    let rd = fs::read_dir(&root)
+    let rd = fs
+        ::read_dir(&root)
         .map_err(|e| format!("Failed to list {}: {}", root.to_string_lossy(), e))?;
     for e in rd.flatten() {
         let p = e.path();
@@ -38,9 +44,13 @@ pub fn list_banks(cwd: &str) -> Result<(), String> {
     }
     entries.sort();
     for p in entries {
-        let id = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let id = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         let fp = p.join("bank.toml");
-        let doc: BankTomlDoc = fs::read_to_string(&fp)
+        let doc: BankTomlDoc = fs
+            ::read_to_string(&fp)
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
             .unwrap_or_default();
@@ -50,46 +60,71 @@ pub fn list_banks(cwd: &str) -> Result<(), String> {
         let version = b.version.unwrap_or_else(|| "?".into());
         let access = b.access.unwrap_or_else(|| "?".into());
         let description = b.description.unwrap_or_default();
-        println!(
-            "- {}.{}  v{}  [{}]  {}",
-            author, name, version, access, description
-        );
+        println!("- {}.{}  v{}  [{}]  {}", author, name, version, access, description);
     }
     Ok(())
 }
 
+/// Bumps the version of a bank.
+///
+/// ### Parameters
+/// - `cwd`: The current working directory.
+/// - `id`: The ID of the bank (format: <author>.<name>).
+/// - `bump`: The version bump to apply (e.g. "patch", "minor", "major").
+///
 pub fn bump_version(cwd: &str, id: &str, bump: &str) -> Result<(), String> {
     let bank_dir = Path::new(cwd).join("generated").join("banks").join(id);
     if !bank_dir.is_dir() {
-        return Err(format!(
-            "Bank '{}' not found under {}",
-            id,
-            bank_dir.parent().unwrap_or(Path::new("")).to_string_lossy()
-        ));
+        return Err(
+            format!(
+                "Bank '{}' not found under {}",
+                id,
+                bank_dir.parent().unwrap_or(Path::new("")).to_string_lossy()
+            )
+        );
     }
     let path = bank_dir.join("bank.toml");
     if !path.exists() {
-        return Err(format!(
-            "bank.toml not found in {}",
-            bank_dir.to_string_lossy()
-        ));
+        return Err(format!("bank.toml not found in {}", bank_dir.to_string_lossy()));
     }
 
     // Read current version from TOML, but update by editing the text to preserve formatting
-    let content = fs::read_to_string(&path)
+    let content = fs
+        ::read_to_string(&path)
         .map_err(|e| format!("Failed to read {}: {}", path.to_string_lossy(), e))?;
     let current = parse_version_from_bank_toml(&content).unwrap_or_else(|| "0.0.1".to_string());
     let new_version = semver::compute_bump(&current, bump)?;
 
     let updated = write_version_in_bank_toml(&content, &new_version)?;
-    fs::write(&path, updated)
+    fs
+        ::write(&path, updated)
         .map_err(|e| format!("Failed to write {}: {}", path.to_string_lossy(), e))?;
     println!("✅ {} -> {}", current, new_version);
     Ok(())
 }
 
+/// Deletes a generated bank directory under `generated/banks/<id>`.
+///
+/// ### Parameters
+/// - `cwd`: current working directory.
+/// - `id`: bank identifier `<author>.<name>`.
+/// 
+pub fn delete_bank(cwd: &str, id: &str) -> Result<(), String> {
+    let bank_dir = Path::new(cwd).join("generated").join("banks").join(id);
+    if !bank_dir.exists() {
+        return Err(format!("Bank '{}' not found under {}", id, bank_dir.parent().unwrap_or(Path::new("")).to_string_lossy()));
+    }
+    std::fs::remove_dir_all(&bank_dir).map_err(|e| format!("Failed to remove {}: {}", bank_dir.to_string_lossy(), e))?;
+    println!("✅ Deleted bank: {}", bank_dir.to_string_lossy());
+    Ok(())
+}
+
+/// Parses the version from the bank.toml content.
+///
+/// ### Parameters
+/// - `toml_text`: The TOML content to parse.
+///
 fn parse_version_from_bank_toml(toml_text: &str) -> Option<String> {
-    // Quick parse: prefer TOML parsing for correctness
     if let Ok(doc) = toml::from_str::<BankTomlDoc>(toml_text) {
         if let Some(b) = doc.bank {
             return b.version;
@@ -98,10 +133,17 @@ fn parse_version_from_bank_toml(toml_text: &str) -> Option<String> {
     None
 }
 
-// compute_bump moved to utils::semver
-
+/// Writes the version to the bank.toml content.
+///
+/// ### Parameters
+/// - `original`: The original bank version.
+/// - `new_version`: The new version to write.
+///
 fn write_version_in_bank_toml(original: &str, new_version: &str) -> Result<String, String> {
-    let mut lines: Vec<String> = original.lines().map(|s| s.to_string()).collect();
+    let mut lines: Vec<String> = original
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
     let mut in_bank = false;
     let mut bank_start = None::<usize>;
     let mut bank_end = lines.len();
@@ -123,7 +165,11 @@ fn write_version_in_bank_toml(original: &str, new_version: &str) -> Result<Strin
     let start = bank_start.unwrap();
     // Search for version line inside (start, bank_end)
     let mut version_line_idx: Option<usize> = None;
-    for (i, line) in lines.iter().enumerate().take(bank_end).skip(start + 1) {
+    for (i, line) in lines
+        .iter()
+        .enumerate()
+        .take(bank_end)
+        .skip(start + 1) {
         let t = line.trim();
         if t.starts_with("version") && t.contains('=') {
             version_line_idx = Some(i);
@@ -145,9 +191,13 @@ fn write_version_in_bank_toml(original: &str, new_version: &str) -> Result<Strin
             // Insert before the blank line that separates bank and next section (if any)
             // Find last non-empty line inside bank block
             let mut insert_at = bank_end;
-            for (i, line) in lines.iter().enumerate().take(bank_end).skip(start + 1) {
+            for (i, line) in lines
+                .iter()
+                .enumerate()
+                .take(bank_end)
+                .skip(start + 1) {
                 if line.trim().is_empty() {
-                    insert_at = i; // first blank -> insert here
+                    insert_at = i;
                     break;
                 }
             }

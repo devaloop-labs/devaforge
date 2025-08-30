@@ -38,13 +38,17 @@ if (binaryName !== "") {
   https
     .get(url, (res: any) => {
       if (res.statusCode === 404) {
-        console.warn(`⚠️  Asset not found (HTTP 404). Skipping binary download.`);
+        console.warn(
+          `⚠️  Asset not found (HTTP 404). Skipping binary download.`
+        );
         res.resume();
         return;
       }
-      
+
       if (res.statusCode !== 200) {
-        console.error(`❌ Failed (HTTP ${res.statusCode}). Skipping binary download.`);
+        console.error(
+          `❌ Failed (HTTP ${res.statusCode}). Skipping binary download.`
+        );
         res.resume();
         return;
       }

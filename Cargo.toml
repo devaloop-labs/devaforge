@@ -1,6 +1,6 @@
 [package]
 name = "devaforge"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Devaloop <contact@devaloop.com>"]
 description = "An addon generator for Devalang, the domain-specific language for sound and music."
 edition = "2024"
@@ -28,3 +28,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"
+
+[workspace]
+members = ["."]
+exclude = []

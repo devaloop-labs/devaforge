@@ -13,7 +13,7 @@ Bank will be generated at `generated/banks/<author>.<name>`
 Once created, you can add sounds inside its `audio` folder.
 
 ```bash
-cargo run -- bank create
+devaforge bank create
 ```
 
 ## Build
@@ -23,7 +23,7 @@ This command will discover all audio files in the `audio` folder of each bank an
 This command will compile all banks and discover their sounds into their `.devabank` compressed file (`output/bank/<author>.<name>.devabank`).
 
 ```bash
-cargo run -- bank build
+devaforge bank build
 ```
 
 After build, you can copy-paste the generated bank (`generated/banks/<author>.<name>/`) files to your Devalang project inside the `.deva/bank/<author>.<name>/` folder then use them in your project by declaring them in your `.devalang` like this :
@@ -45,7 +45,15 @@ For more information on how to use banks in your project, please refer to the De
 List all available banks under `generated/banks`.
 
 ```bash
-cargo run -- bank list
+devaforge bank list
+```
+
+## Delete
+
+Delete a bank by its identifier.
+
+```bash
+devaforge bank delete <author>.<name>
 ```
 
 ## Versioning
@@ -53,10 +61,10 @@ cargo run -- bank list
 Bump a bank version by `major`, `minor`, or `patch`.
 
 ```bash
-cargo run -- bank version <author>.<name> <major|minor|patch>
+devaforge bank version <author>.<name> <major|minor|patch>
 
 # Examples
-cargo run -- bank version devaloop.808 major   # (M+1).0.0
-cargo run -- bank version devaloop.808 minor   # M.(m+1).0
-cargo run -- bank version devaloop.808 patch   # M.m.(p+1)
+devaforge bank version devaloop.808 major   # (M+1).0.0
+devaforge bank version devaloop.808 minor   # M.(m+1).0
+devaforge bank version devaloop.808 patch   # M.m.(p+1)
 ```

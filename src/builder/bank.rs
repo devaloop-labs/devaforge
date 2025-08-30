@@ -29,11 +29,15 @@ struct BankToml {
     triggers: Vec<TriggerEntry>,
 }
 
-pub fn build_addon(path: &str, _release: &bool, cwd: &str) -> Result<(), String> {
-    // 1) Resolve the bank directory from input (relative path or alias bank.<id>)
+/// Builds a bank located at the given path.
+///
+/// ### Parameters
+/// - `path`: The path of the bank
+/// - `cwd`: The current working directory
+///
+pub fn build_bank(path: &str, cwd: &str) -> Result<(), String> {
     let bank_dir = resolve_bank_dir(cwd, path)?;
 
-    // 2) Ensure bank.toml exists and load it
     let bank_toml_path = bank_dir.join("bank.toml");
     if !bank_toml_path.exists() {
         return Err(format!(
@@ -43,12 +47,11 @@ pub fn build_addon(path: &str, _release: &bool, cwd: &str) -> Result<(), String>
     }
 
     let mut bank_doc: BankToml = {
-    let txt = fs::read_to_string(&bank_toml_path)
+        let txt = fs::read_to_string(&bank_toml_path)
             .map_err(|e| format!("Failed to read bank.toml: {}", e))?;
-    toml::from_str(&txt).map_err(|e| format!("Invalid TOML: {}", e))?
+        toml::from_str(&txt).map_err(|e| format!("Invalid TOML: {}", e))?
     };
 
-    // 3) Scan audio directory and compute triggers
     let audio_dir = bank_dir.join("audio");
     if !audio_dir.is_dir() {
         return Err(format!(
@@ -57,15 +60,11 @@ pub fn build_addon(path: &str, _release: &bool, cwd: &str) -> Result<(), String>
         ));
     }
 
-    // Discover triggers from filesystem
     let discovered = discover_triggers(&audio_dir)?;
-    // Merge with existing triggers: preserve custom names for same path, drop missing, add new.
     bank_doc.triggers = merge_triggers(bank_doc.triggers, discovered);
 
-    // 4) Write triggers after bank
     write_triggers_after_bank(&bank_toml_path, &bank_doc.triggers)?;
 
-    // 5) Build zip -> <root>/output/bank/<author>.<bankName>.devabank
     let author = bank_doc.bank.author.clone();
     let name = bank_doc.bank.name.clone();
     if author.trim().is_empty() || name.trim().is_empty() {
@@ -77,15 +76,26 @@ pub fn build_addon(path: &str, _release: &bool, cwd: &str) -> Result<(), String>
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
     let out_file = out_root.join(format!("{}.{}.devabank", author, name));
 
-    create_bank_zip(&bank_dir, &bank_toml_path, &audio_dir, &out_file)?;
-
+    create_bank_zip(
+        &bank_dir,
+        &bank_toml_path,
+        &audio_dir,
+        &out_file,
+        &author,
+        &name,
+        bank_doc.bank.description.clone(),
+    )?;
     println!("✅ Bank built: {}", out_file.to_string_lossy());
 
     Ok(())
 }
 
-pub fn build_all_addons(release: &bool, cwd: &str) -> Result<(), String> {
-    // For now: build banks only
+/// Builds all banks in the generated directory.
+///
+/// ### Parameters
+/// - `cwd`: The current working directory
+///
+pub fn build_all_banks(cwd: &str) -> Result<(), String> {
     let banks_root = Path::new(cwd).join("generated").join("banks");
     if !banks_root.exists() {
         return Err(format!(
@@ -114,13 +124,9 @@ pub fn build_all_addons(release: &bool, cwd: &str) -> Result<(), String> {
     let total = bank_dirs.len();
     for p in bank_dirs {
         let p_str = p.to_string_lossy().to_string();
-        match build_addon(&p_str, release, cwd) {
-            Ok(_) => {
-                // continue
-            }
-            Err(e) => {
-                errors.push(format!("{} -> {}", p_str, e));
-            }
+        match build_bank(&p_str, cwd) {
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{} -> {}", p_str, e)),
         }
     }
 
@@ -138,9 +144,14 @@ pub fn build_all_addons(release: &bool, cwd: &str) -> Result<(), String> {
     }
 }
 
+/// Resolves the bank directory from the given input path or alias.
+///
+/// ### Parameters
+/// - `cwd`: The current working directory
+/// - `input`: The input path or alias
+///
 fn resolve_bank_dir(cwd: &str, input: &str) -> Result<PathBuf, String> {
     let candidate = Path::new(cwd).join(input);
-    // If input points directly to a file bank.toml
     if candidate.is_file()
         && candidate
             .file_name()
@@ -149,19 +160,16 @@ fn resolve_bank_dir(cwd: &str, input: &str) -> Result<PathBuf, String> {
     {
         return Ok(candidate.parent().unwrap().to_path_buf());
     }
-    // If input is a directory containing bank.toml
     if candidate.is_dir() && candidate.join("bank.toml").exists() {
         return Ok(candidate);
     }
 
-    // Handle alias: bank.<id>
     if let Some(rest) = input.strip_prefix("bank.") {
         let banks_root = Path::new(cwd).join("generated").join("banks");
         let by_exact = banks_root.join(rest);
         if by_exact.join("bank.toml").exists() {
             return Ok(by_exact);
         }
-        // If no dot provided, try to find a single match that ends with .<rest>
         if !rest.contains('.') {
             if let Ok(read_dir) = fs::read_dir(&banks_root) {
                 let mut matches: Vec<PathBuf> = Vec::new();
@@ -202,13 +210,14 @@ fn resolve_bank_dir(cwd: &str, input: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// Discover audio triggers in the given directory.
+///
+/// ### Parameters
+/// - `audio_dir`: The directory to search for audio files
+///
 fn discover_triggers(audio_dir: &Path) -> Result<Vec<TriggerEntry>, String> {
     let mut out: Vec<TriggerEntry> = Vec::new();
     let allowed = ["wav", "mp3", "ogg", "aif", "aiff", "flac"];
-
-    // Load existing triggers if present to preserve names when paths match
-    // (Caller will merge with bank_doc, but this function focuses on discovery only.)
-
     let files = ufs::walk_files(audio_dir)?;
     for p in files {
         let ext_ok = p
@@ -219,7 +228,6 @@ fn discover_triggers(audio_dir: &Path) -> Result<Vec<TriggerEntry>, String> {
         if !ext_ok {
             continue;
         }
-        // Compute path relative to audio_dir with forward slashes and leading ./
         let rel = ufs::path_relative_to(&p, audio_dir).unwrap_or_else(|| {
             p.file_name()
                 .map(PathBuf::from)
@@ -236,29 +244,36 @@ fn discover_triggers(audio_dir: &Path) -> Result<Vec<TriggerEntry>, String> {
             path: rel_str,
         });
     }
-
-    // Keep a stable order (by path) for deterministic outputs
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
 
-// moved common fs utilities to utils::fs
-
+/// Creates a ZIP archive of the bank directory.
+///
+/// ### Parameters
+/// - `bank_dir`: The path to the bank directory.
+/// - `bank_toml_path`: The path to the bank.toml file.
+/// - `audio_dir`: The path to the audio directory.
+/// - `out_file`: The output ZIP file path.
+/// - `author`: The author of the bank.
+/// - `name`: The name of the bank.
+/// - `description`: An optional description of the bank.
+///
 fn create_bank_zip(
     bank_dir: &Path,
     bank_toml_path: &Path,
     audio_dir: &Path,
     out_file: &Path,
+    author: &str,
+    name: &str,
+    description: Option<String>,
 ) -> Result<(), String> {
-    // Use zip crate to create the archive containing bank.toml and audio/*
     let file =
         fs::File::create(out_file).map_err(|e| format!("Failed to create output file: {}", e))?;
-
     let mut zip = zip::ZipWriter::new(file);
     let options =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    // Add bank.toml at root of zip
     zip.start_file("bank.toml", options)
         .map_err(|e| format!("Failed to zip bank.toml: {}", e))?;
     let mut toml_bytes = Vec::new();
@@ -268,7 +283,40 @@ fn create_bank_zip(
     zip.write_all(&toml_bytes)
         .map_err(|e| format!("Failed to write bank.toml to zip: {}", e))?;
 
-    // Add audio directory entries recursively as audio/<relative_path>
+    // Add README.md (from bank dir if present, else default)
+    zip.start_file("README.md", options)
+        .map_err(|e| format!("Failed to add README.md: {}", e))?;
+    let readme_path = bank_dir.join("README.md");
+    if readme_path.exists() {
+        let mut buf = Vec::new();
+        fs::File::open(&readme_path)
+            .and_then(|mut f| f.read_to_end(&mut buf))
+            .map_err(|e| format!("Failed to read README.md: {}", e))?;
+        zip.write_all(&buf)
+            .map_err(|e| format!("Failed to write README.md: {}", e))?;
+    } else {
+        let readme = default_readme_bank(author, name, description.as_deref());
+        zip.write_all(readme.as_bytes())
+            .map_err(|e| format!("Failed to write README.md: {}", e))?;
+    }
+
+    // Add LICENSE (from bank dir if present, else default MIT)
+    zip.start_file("LICENSE", options)
+        .map_err(|e| format!("Failed to add LICENSE: {}", e))?;
+    let license_path = bank_dir.join("LICENSE");
+    if license_path.exists() {
+        let mut buf = Vec::new();
+        fs::File::open(&license_path)
+            .and_then(|mut f| f.read_to_end(&mut buf))
+            .map_err(|e| format!("Failed to read LICENSE: {}", e))?;
+        zip.write_all(&buf)
+            .map_err(|e| format!("Failed to write LICENSE: {}", e))?;
+    } else {
+        let license = default_mit_license(author);
+        zip.write_all(license.as_bytes())
+            .map_err(|e| format!("Failed to write LICENSE: {}", e))?;
+    }
+
     zip.add_directory("audio/", options)
         .map_err(|e| format!("Failed to add audio directory to zip: {}", e))?;
 
@@ -296,14 +344,44 @@ fn create_bank_zip(
 
     zip.finish()
         .map_err(|e| format!("Failed to finalize zip: {}", e))?;
-    // Touch to ensure proper timestamp (on some platforms)
     let _ = fs::metadata(out_file).map_err(|e| format!("Failed to stat zip: {}", e))?;
-
-    // sanity: bank_dir is unused beyond; keep param for future when including more files
     let _ = bank_dir;
     Ok(())
 }
 
+/// Gets the default README.md for a bank.
+///
+/// ### Parameters
+/// - `author`: The author of the bank.
+/// - `name`: The name of the bank.
+/// - `description`: The description of the bank.
+///
+fn default_readme_bank(author: &str, name: &str, description: Option<&str>) -> String {
+    let desc = description.unwrap_or("Sample bank for Devalang.");
+    format!(
+        "# {}.{} Bank\n\n{}\n\nContents:\n- bank.toml\n- audio/ (assets)\n- LICENSE\n\nBuilt with devaforge.\n",
+        author, name, desc
+    )
+}
+
+/// Gets the default LICENSE for a bank.
+///
+/// ### Parameters
+/// - `author`: The author of the bank.
+///
+fn default_mit_license(author: &str) -> String {
+    format!(
+        "MIT License\n\nCopyright (c) {}\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\n of this software and associated documentation files (the \"Software\"), to deal\n in the Software without restriction, including without limitation the rights\n to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n copies of the Software, and to permit persons to whom the Software is\n furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\n copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n SOFTWARE.\n",
+        author
+    )
+}
+
+/// Writes bank's triggers after the `[bank]` section.
+///
+/// ### Parameters
+/// - `bank_toml_path`: The path to the bank.toml file.
+/// - `triggers`: The triggers to add to the bank.toml file.
+///
 fn write_triggers_after_bank(
     bank_toml_path: &Path,
     triggers: &[TriggerEntry],
@@ -311,7 +389,6 @@ fn write_triggers_after_bank(
     let original = fs::read_to_string(bank_toml_path)
         .map_err(|e| format!("Failed to read bank.toml: {}", e))?;
 
-    // 1) Remove existing [[triggers]] blocks
     let mut cleaned: Vec<String> = Vec::new();
     let mut skipping_triggers = false;
     for line in original.lines() {
@@ -319,58 +396,43 @@ fn write_triggers_after_bank(
         if !skipping_triggers {
             if trimmed == "[[triggers]]" {
                 skipping_triggers = true;
-                continue; // skip header line
+                continue;
             }
             cleaned.push(line.to_string());
         } else {
-            // currently skipping; stop skipping when we hit a non-triggers header
             if trimmed.starts_with('[') && trimmed != "[[triggers]]" {
                 skipping_triggers = false;
-                cleaned.push(line.to_string()); // keep this new section header
+                cleaned.push(line.to_string());
             } else {
-                // still in triggers block -> skip
                 continue;
             }
         }
     }
 
-    // 2) Find insertion point: right after [bank] section block
     let mut insert_idx = cleaned.len();
     let mut in_bank = false;
     for (i, line) in cleaned.iter().enumerate() {
         let t = line.trim();
         if t == "[bank]" {
             in_bank = true;
-            insert_idx = i + 1; // default right after header if no fields
+            insert_idx = i + 1;
             continue;
         }
         if in_bank && t.starts_with('[') && t != "[bank]" {
-            // Next section header -> insert before this
             insert_idx = i;
             break;
         }
-        if in_bank {
-            insert_idx = i + 1; // keep advancing until end of bank block
+        if in_bank && !t.is_empty() {
+            insert_idx = i + 1;
         }
     }
 
-    // 3) Recompose file with exactly one blank line between sections
-    let (mut head, mut tail): (Vec<String>, Vec<String>) = {
-        let (h, t) = cleaned.split_at(insert_idx);
-        (h.to_vec(), t.to_vec())
-    };
-
-    // Trim trailing blank lines from head
-    while head.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
-        head.pop();
-    }
-
-    // Trim leading blank lines from tail
-    while tail.first().map(|l| l.trim().is_empty()).unwrap_or(false) {
+    let head = cleaned[..insert_idx].to_vec();
+    let mut tail = cleaned[insert_idx..].to_vec();
+    while !tail.is_empty() && tail[0].trim().is_empty() {
         tail.remove(0);
     }
 
-    // Build triggers blocks with a single blank line between each
     let mut trig_lines: Vec<String> = Vec::new();
     if !triggers.is_empty() {
         for (i, t) in triggers.iter().enumerate() {
@@ -378,93 +440,87 @@ fn write_triggers_after_bank(
             trig_lines.push(format!("name = \"{}\"", t.name));
             trig_lines.push(format!("path = \"{}\"", t.path));
             if i + 1 < triggers.len() {
-                trig_lines.push(String::new()); // blank between triggers
+                trig_lines.push(String::new());
             }
         }
     }
 
-    // Assembler: head + 1 blank + triggers + 1 blank + tail
     let mut result_lines: Vec<String> = Vec::new();
     result_lines.extend(head);
     if !trig_lines.is_empty() {
-        result_lines.push(String::new()); // exactly one blank between [bank] and triggers
+        result_lines.push(String::new());
         result_lines.extend(trig_lines);
         if !tail.is_empty() {
-            result_lines.push(String::new()); // exactly one blank before next section
+            result_lines.push(String::new());
         }
     }
     result_lines.extend(tail);
 
-    // Join with newlines and ensure single trailing newline
     let mut result = result_lines.join("\n");
     if !result.ends_with('\n') {
         result.push('\n');
     }
-
     fs::write(bank_toml_path, result).map_err(|e| format!("Failed to write bank.toml: {}", e))?;
     Ok(())
 }
 
+/// Merges the existing and discovered triggers.
+///
+/// ### Parameters
+/// - `existing`: The existing triggers.
+/// - `discovered`: The discovered triggers.
+///
 fn merge_triggers(existing: Vec<TriggerEntry>, discovered: Vec<TriggerEntry>) -> Vec<TriggerEntry> {
     use std::collections::{HashMap, HashSet};
-    let mut by_path: HashMap<String, String> = HashMap::new(); // path -> name
+    let mut by_path: HashMap<String, String> = HashMap::new();
     for t in existing {
         by_path.insert(t.path.clone(), t.name.clone());
     }
 
     let mut used_names: HashSet<String> = by_path.values().cloned().collect();
-    let mut discovered_paths: HashSet<String> = HashSet::new();
-
-    // Build final list, preserving names where possible
     let mut final_triggers: Vec<TriggerEntry> = Vec::new();
     for d in discovered {
         let path = d.path.clone();
-        discovered_paths.insert(path.clone());
         if let Some(existing_name) = by_path.get(&path) {
-            // Keep existing name
             final_triggers.push(TriggerEntry {
                 name: existing_name.clone(),
-                path: path.clone(),
+                path,
             });
         } else {
-            // Assign a unique name derived from filename and possibly folder
             let base = d.name;
             let unique = disambiguate_name(&base, &path, &mut used_names);
-            final_triggers.push(TriggerEntry {
-                name: unique,
-                path: path.clone(),
-            });
+            final_triggers.push(TriggerEntry { name: unique, path });
         }
     }
-
-    // Sort deterministically by path
     final_triggers.sort_by(|a, b| a.path.cmp(&b.path));
     final_triggers
 }
 
+/// Disambiguates a name to ensure uniqueness within the used set.
+///
+/// ### Parameters
+/// - `base`: The base name to disambiguate.
+/// - `rel_path_with_dot`: The relative path with a dot prefix.
+/// - `used`: The set of already used names.
+///
 fn disambiguate_name(
     base: &str,
     rel_path_with_dot: &str,
     used: &mut std::collections::HashSet<String>,
 ) -> String {
-    // Try base name first
     if !base.is_empty() && !used.contains(base) {
         used.insert(base.to_string());
         return base.to_string();
     }
-
-    // Remove leading "./" then split on '/'
     let rel = rel_path_with_dot.trim_start_matches("./");
     let mut parts: Vec<&str> = rel.split('/').collect();
-    // Last part is filename; take stem from base, others are directories
     if parts.len() > 1 {
-        parts.pop(); // remove filename
+        parts.pop();
         let joined = format!("{}.{}", parts.join("."), base);
         if !used.contains(&joined) {
             used.insert(joined.clone());
             return joined;
         }
-        // Try from the deepest folder backward to progressively disambiguate
         let mut acc: Vec<&str> = Vec::new();
         for comp in parts.iter().rev() {
             acc.push(comp);
@@ -479,8 +535,6 @@ fn disambiguate_name(
             }
         }
     }
-
-    // Fallback to numeric suffixes
     let mut i = 2usize;
     loop {
         let cand = format!("{}_{}", base, i);

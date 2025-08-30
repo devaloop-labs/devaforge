@@ -22,10 +22,10 @@ const bumpVersion = (bumpType, projectVersionPath) => __awaiter(void 0, void 0, 
         throw new Error("Invalid version format in project-version.json");
     }
     if (!bumpType) {
-        console.error("❌ Please specify a version type (major, minor, patch, pre)");
+        console.error("❌ Please specify a version type (major, minor, patch)");
         process.exit(1);
     }
-    let [_, major, minor, patch, pre] = match;
+    let [_, major, minor, patch] = match;
     let nextVersion = "";
     switch (bumpType) {
         case "major":
@@ -37,12 +37,8 @@ const bumpVersion = (bumpType, projectVersionPath) => __awaiter(void 0, void 0, 
         case "patch":
             nextVersion = `${major}.${minor}.${+patch + 1}`;
             break;
-        case "pre":
-            const [preid, prenumber] = (pre || "alpha.0").split(".");
-            nextVersion = `${major}.${minor}.${patch}-${preid}.${+prenumber + 1}`;
-            break;
         default:
-            console.error("❌ Version type non-recognized (major, minor, patch, pre)");
+            console.error("❌ Version type non-recognized (major, minor, patch)");
             process.exit(1);
     }
     versionData.version = nextVersion;

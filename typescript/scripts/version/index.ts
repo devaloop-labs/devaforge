@@ -7,7 +7,10 @@ import { fetchVersion } from "./fetch";
 const bumpType = process.argv[2] || "patch";
 
 (async () => {
-  const projectVersionPath = path.join(__dirname, "../../../project-version.json");
+  const projectVersionPath = path.join(
+    __dirname,
+    "../../../project-version.json"
+  );
 
   try {
     const newVersion = await bumpVersion(bumpType, projectVersionPath);
@@ -16,10 +19,8 @@ const bumpType = process.argv[2] || "patch";
     await syncVersion(projectVersionPath);
 
     console.log(`✅ Project version updated to : ${newVersion}`);
-  }
-  catch (error) {
+  } catch (error) {
     console.error(`❌ Error updating project version: ${error}`);
     process.exit(1);
   }
-
 })();
