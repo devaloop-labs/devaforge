@@ -1,7 +1,7 @@
 {
   "name": "@devaloop/devaforge",
   "private": false,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "An addon generator for Devalang, the domain-specific language for sound and music.",
   "main": "out-tsc/index.js",
   "bin": {
@@ -10,6 +10,8 @@
   "scripts": {
     "rust:fmt": "cargo fmt",
     "scripts:version:bump": "tsc && node out-tsc/scripts/version/index.js",
+    "scripts:copy-version": "tsc && node out-tsc/scripts/version/copy-to-binary.js --out-dir ./out-tsc/bin",
+    "prepublish": "npm run scripts:copy-version",
     "postinstall": "node out-tsc/scripts/postinstall.js"
   },
   "homepage": "https://devalang.com",

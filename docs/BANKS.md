@@ -8,7 +8,7 @@
 
 You will be prompted to enter a name for your new bank.
 
-Bank will be generated at `generated/banks/<author>.<name>`
+Bank will be generated at `generated/banks/<publisher>/<name>`
 
 Once created, you can add sounds inside its `audio` folder.
 
@@ -20,19 +20,19 @@ devaforge bank create
 
 This command will discover all audio files in the `audio` folder of each bank and place them into the bank's metadata.
 
-This command will compile all banks and discover their sounds into their `.devabank` compressed file (`output/bank/<author>.<name>.devabank`).
+This command will compile all banks and discover their sounds into their `.devabank` compressed file (`output/bank/<publisher>.<name>.devabank`).
 
 ```bash
 devaforge bank build
 ```
 
-After build, you can copy-paste the generated bank (`generated/banks/<author>.<name>/`) files to your Devalang project inside the `.deva/bank/<author>.<name>/` folder then use them in your project by declaring them in your `.devalang` like this :
+After build, you can copy-paste the generated bank (`generated/banks/<publisher>/<name>/`) files to your Devalang project inside the `.deva/bank/<publisher>/<name>/` folder then use them in your project by declaring them in your `.devalang` like this :
 
 ```toml
 ...
 
 [[banks]]
-path = "devalang://bank/<author>.<name>"
+path = "devalang://bank/<publisher>.<name>"
 version = "0.0.1"
 
 ...
@@ -53,7 +53,7 @@ devaforge bank list
 Delete a bank by its identifier.
 
 ```bash
-devaforge bank delete <author>.<name>
+devaforge bank delete <publisher>.<name>
 ```
 
 ## Versioning
@@ -61,7 +61,7 @@ devaforge bank delete <author>.<name>
 Bump a bank version by `major`, `minor`, or `patch`.
 
 ```bash
-devaforge bank version <author>.<name> <major|minor|patch>
+devaforge bank version <publisher>.<name> <major|minor|patch>
 
 # Examples
 devaforge bank version devaloop.808 major   # (M+1).0.0

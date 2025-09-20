@@ -1,13 +1,15 @@
 use crate::utils::fs as ufs;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use tar::Builder as TarBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct BankSection {
     name: String,
-    author: String,
+    publisher: String,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -65,23 +67,23 @@ pub fn build_bank(path: &str, cwd: &str) -> Result<(), String> {
 
     write_triggers_after_bank(&bank_toml_path, &bank_doc.triggers)?;
 
-    let author = bank_doc.bank.author.clone();
+    let publisher = bank_doc.bank.publisher.clone();
     let name = bank_doc.bank.name.clone();
-    if author.trim().is_empty() || name.trim().is_empty() {
-        return Err("Fields [bank].author and [bank].name are required in bank.toml".into());
+    if publisher.trim().is_empty() || name.trim().is_empty() {
+        return Err("Fields [bank].publisher and [bank].name are required in bank.toml".into());
     }
 
     let out_root = Path::new(cwd).join("output").join("bank");
     fs::create_dir_all(&out_root)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
-    let out_file = out_root.join(format!("{}.{}.devabank", author, name));
+    let out_file = out_root.join(format!("{}.{}.tar.gz", publisher, name));
 
-    create_bank_zip(
+    create_bank_tar_gz(
         &bank_dir,
         &bank_toml_path,
         &audio_dir,
         &out_file,
-        &author,
+        &publisher,
         &name,
         bank_doc.bank.description.clone(),
     )?;
@@ -104,15 +106,26 @@ pub fn build_all_banks(cwd: &str) -> Result<(), String> {
         ));
     }
 
+    // Discover bank directories by searching for bank.toml anywhere under generated/banks.
+    // Project layout uses generated/banks/<publisher>/<name>/bank.toml, so the previous
+    // implementation that only checked the first level missed nested banks.
     let mut bank_dirs: Vec<PathBuf> = Vec::new();
-    let rd = fs::read_dir(&banks_root)
-        .map_err(|e| format!("Failed to list {}: {}", banks_root.to_string_lossy(), e))?;
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() && p.join("bank.toml").exists() {
-            bank_dirs.push(p);
+    let files = ufs::walk_files(&banks_root)
+        .map_err(|e| format!("Failed to traverse {}: {}", banks_root.to_string_lossy(), e))?;
+    for p in files {
+        if p.file_name()
+            .and_then(|f| f.to_str())
+            .map(|s| s.eq_ignore_ascii_case("bank.toml"))
+            .unwrap_or(false)
+        {
+            if let Some(parent) = p.parent() {
+                bank_dirs.push(parent.to_path_buf());
+            }
         }
     }
+    // Deduplicate and sort
+    bank_dirs.sort();
+    bank_dirs.dedup();
 
     if bank_dirs.is_empty() {
         return Err("No banks to build (generated/banks is empty)".into());
@@ -191,7 +204,7 @@ fn resolve_bank_dir(cwd: &str, input: &str) -> Result<PathBuf, String> {
                         banks_root.to_string_lossy()
                     )),
                     _ => Err(format!(
-                        "Multiple banks matched bank.{}; use 'bank.<author>.<name>'",
+                        "Multiple banks matched bank.{}; use 'bank.<publisher>.<name>'",
                         rest
                     )),
                 };
@@ -255,97 +268,76 @@ fn discover_triggers(audio_dir: &Path) -> Result<Vec<TriggerEntry>, String> {
 /// - `bank_toml_path`: The path to the bank.toml file.
 /// - `audio_dir`: The path to the audio directory.
 /// - `out_file`: The output ZIP file path.
-/// - `author`: The author of the bank.
+/// - `publisher`: The publisher of the bank.
 /// - `name`: The name of the bank.
 /// - `description`: An optional description of the bank.
 ///
-fn create_bank_zip(
+fn create_bank_tar_gz(
     bank_dir: &Path,
     bank_toml_path: &Path,
     audio_dir: &Path,
     out_file: &Path,
-    author: &str,
+    publisher: &str,
     name: &str,
     description: Option<String>,
 ) -> Result<(), String> {
     let file =
         fs::File::create(out_file).map_err(|e| format!("Failed to create output file: {}", e))?;
-    let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let enc = GzEncoder::new(file, Compression::default());
+    let mut tar = TarBuilder::new(enc);
 
-    zip.start_file("bank.toml", options)
-        .map_err(|e| format!("Failed to zip bank.toml: {}", e))?;
-    let mut toml_bytes = Vec::new();
-    fs::File::open(bank_toml_path)
-        .and_then(|mut f| f.read_to_end(&mut toml_bytes))
-        .map_err(|e| format!("Failed to read bank.toml: {}", e))?;
-    zip.write_all(&toml_bytes)
-        .map_err(|e| format!("Failed to write bank.toml to zip: {}", e))?;
+    // bank.toml
+    tar.append_path_with_name(bank_toml_path, "bank.toml")
+        .map_err(|e| format!("Failed to add bank.toml to tar: {}", e))?;
 
-    // Add README.md (from bank dir if present, else default)
-    zip.start_file("README.md", options)
-        .map_err(|e| format!("Failed to add README.md: {}", e))?;
+    // README.md (from bank dir if present, else default)
     let readme_path = bank_dir.join("README.md");
     if readme_path.exists() {
-        let mut buf = Vec::new();
-        fs::File::open(&readme_path)
-            .and_then(|mut f| f.read_to_end(&mut buf))
-            .map_err(|e| format!("Failed to read README.md: {}", e))?;
-        zip.write_all(&buf)
-            .map_err(|e| format!("Failed to write README.md: {}", e))?;
+        tar.append_path_with_name(&readme_path, "README.md")
+            .map_err(|e| format!("Failed to add README.md to tar: {}", e))?;
     } else {
-        let readme = default_readme_bank(author, name, description.as_deref());
-        zip.write_all(readme.as_bytes())
-            .map_err(|e| format!("Failed to write README.md: {}", e))?;
+        let readme = default_readme_bank(publisher, name, description.as_deref());
+        let mut header = tar::Header::new_gnu();
+        header
+            .set_path("README.md")
+            .map_err(|e| format!("Failed to set header path: {}", e))?;
+        header.set_size(readme.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, readme.as_bytes())
+            .map_err(|e| format!("Failed to append README.md to tar: {}", e))?;
     }
 
-    // Add LICENSE (from bank dir if present, else default MIT)
-    zip.start_file("LICENSE", options)
-        .map_err(|e| format!("Failed to add LICENSE: {}", e))?;
+    // LICENSE (from bank dir if present, else default MIT)
     let license_path = bank_dir.join("LICENSE");
     if license_path.exists() {
-        let mut buf = Vec::new();
-        fs::File::open(&license_path)
-            .and_then(|mut f| f.read_to_end(&mut buf))
-            .map_err(|e| format!("Failed to read LICENSE: {}", e))?;
-        zip.write_all(&buf)
-            .map_err(|e| format!("Failed to write LICENSE: {}", e))?;
+        tar.append_path_with_name(&license_path, "LICENSE")
+            .map_err(|e| format!("Failed to add LICENSE to tar: {}", e))?;
     } else {
-        let license = default_mit_license(author);
-        zip.write_all(license.as_bytes())
-            .map_err(|e| format!("Failed to write LICENSE: {}", e))?;
+        let license = default_mit_license(publisher);
+        let mut header = tar::Header::new_gnu();
+        header
+            .set_path("LICENSE")
+            .map_err(|e| format!("Failed to set header path: {}", e))?;
+        header.set_size(license.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, license.as_bytes())
+            .map_err(|e| format!("Failed to append LICENSE to tar: {}", e))?;
     }
 
-    zip.add_directory("audio/", options)
-        .map_err(|e| format!("Failed to add audio directory to zip: {}", e))?;
+    // audio/ directory and contents
+    tar.append_dir_all("audio", audio_dir)
+        .map_err(|e| format!("Failed to add audio dir to tar: {}", e))?;
 
-    let files = ufs::walk_files(audio_dir)?;
-    for p in files {
-        if !p.is_file() {
-            continue;
-        }
-        let rel_os = ufs::path_relative_to(&p, audio_dir).unwrap_or_else(|| {
-            p.file_name()
-                .map(PathBuf::from)
-                .unwrap_or_else(PathBuf::new)
-        });
-        let rel = ufs::to_unix_string(&rel_os);
-        let mut data = Vec::new();
-        fs::File::open(&p)
-            .and_then(|mut f| f.read_to_end(&mut data))
-            .map_err(|e| format!("Failed to read audio file: {}", e))?;
-        let zip_path = format!("audio/{}", rel);
-        zip.start_file(zip_path.clone(), options)
-            .map_err(|e| format!("Failed to add {}: {}", zip_path, e))?;
-        zip.write_all(&data)
-            .map_err(|e| format!("Failed to write {}: {}", zip_path, e))?;
-    }
+    // Finish writing tar and gzip
+    let enc = tar
+        .into_inner()
+        .map_err(|e| format!("Failed to finish tar builder: {}", e))?;
+    enc.finish()
+        .map_err(|e| format!("Failed to finish gzip encoder: {}", e))?;
 
-    zip.finish()
-        .map_err(|e| format!("Failed to finalize zip: {}", e))?;
-    let _ = fs::metadata(out_file).map_err(|e| format!("Failed to stat zip: {}", e))?;
-    let _ = bank_dir;
+    let _ = fs::metadata(out_file).map_err(|e| format!("Failed to stat tar.gz: {}", e))?;
     Ok(())
 }
 
@@ -356,23 +348,23 @@ fn create_bank_zip(
 /// - `name`: The name of the bank.
 /// - `description`: The description of the bank.
 ///
-fn default_readme_bank(author: &str, name: &str, description: Option<&str>) -> String {
+fn default_readme_bank(publisher: &str, name: &str, description: Option<&str>) -> String {
     let desc = description.unwrap_or("Sample bank for Devalang.");
     format!(
         "# {}.{} Bank\n\n{}\n\nContents:\n- bank.toml\n- audio/ (assets)\n- LICENSE\n\nBuilt with devaforge.\n",
-        author, name, desc
+        publisher, name, desc
     )
 }
 
 /// Gets the default LICENSE for a bank.
 ///
 /// ### Parameters
-/// - `author`: The author of the bank.
+/// - `publisher`: The publisher of the bank.
 ///
-fn default_mit_license(author: &str) -> String {
+fn default_mit_license(publisher: &str) -> String {
     format!(
         "MIT License\n\nCopyright (c) {}\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\n of this software and associated documentation files (the \"Software\"), to deal\n in the Software without restriction, including without limitation the rights\n to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n copies of the Software, and to permit persons to whom the Software is\n furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\n copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n SOFTWARE.\n",
-        author
+        publisher
     )
 }
 
@@ -399,13 +391,11 @@ fn write_triggers_after_bank(
                 continue;
             }
             cleaned.push(line.to_string());
+        } else if trimmed.starts_with('[') && trimmed != "[[triggers]]" {
+            skipping_triggers = false;
+            cleaned.push(line.to_string());
         } else {
-            if trimmed.starts_with('[') && trimmed != "[[triggers]]" {
-                skipping_triggers = false;
-                cleaned.push(line.to_string());
-            } else {
-                continue;
-            }
+            continue;
         }
     }
 

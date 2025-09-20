@@ -10,7 +10,7 @@
 ![npm](https://img.shields.io/npm/dt/@devaloop/devaforge)
 ![crates](https://img.shields.io/crates/d/devaforge)
 
-# 🦊 Devaforge (addon creator for Devalang)
+# ⚒️ Devaforge (addon creator for Devalang)
 
 You know [Devalang](https://devalang.com), the powerful DSL for music and audio manipulation. Now, with Devaforge, you can easily create and manage your own addons.
 
@@ -27,6 +27,7 @@ This library provides a simple way to create and manage addons for Devalang.
 ## 🚀 Features
 
 - [**BANK GENERATOR**: Create and manage sound banks effortlessly.](./docs/BANKS.md)
+- [**PLUGIN GENERATOR**: Create and manage sound plugins effortlessly.](./docs/PLUGINS.md)
 - More addon types coming soon !
 
 ## ▶️ Get started
@@ -56,7 +57,7 @@ devaforge bank create
 ##### Run the following command to delete a bank:
 
 ```bash
-devaforge bank delete <author>.<bank_name>
+devaforge bank delete <publisher>.<bank_name>
 ```
 
 
